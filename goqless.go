@@ -1,3 +1,4 @@
+// reference: https://github.com/seomoz/qless-py
 package goqless
 
 import (
@@ -108,6 +109,42 @@ func do() {
   }
   fmt.Println(redis.String(reply, err))
 
+  // for {
+  //   //Pop(1, queue, worker, count, now)
+  //   reply, err = funcs["pop"].Do(c, 1, "medchecker.report", "testworker", 1, now)
+  //   if err != nil {
+  //     log.Fatal(err)
+  //   }
+
+  //   values, err := redis.Values(reply, err)
+  //   if err != nil {
+  //     log.Fatal(err)
+  //   }
+
+  //   if len(values) == 0 {
+  //     break
+  //   }
+
+  //   var jobs []Job
+  //   for _, val := range values {
+  //     var job Job
+  //     bs, _ := redis.Bytes(val, err)
+  //     err := json.Unmarshal(bs, &job)
+  //     if err != nil {
+  //       log.Fatal(err)
+  //     }
+  //     jobs = append(jobs, job)
+  //   }
+
+  //   fmt.Println(jobs)
+
+  //   //Cancel(0, id)
+  //   reply, err = funcs["cancel"].Do(c, 0, jobs[0].Jid)
+  //   if err != nil {
+  //     log.Fatal(err)
+  //   }
+  // }
+
   for {
     //Pop(1, queue, worker, count, now)
     reply, err = funcs["pop"].Do(c, 1, "medchecker.report", "testworker", 1, now)
@@ -137,11 +174,21 @@ func do() {
 
     fmt.Println(jobs)
 
-    //Cancel(0, id)
-    reply, err = funcs["cancel"].Do(c, 0, jobs[0].Jid)
+    //Complete(0, jid, worker, queue, now, data, ['next', n, [('delay', d) | ('depends', '["jid1","jid2",...]')])
+    reply, err = funcs["complete"].Do(c, 0, jobs[0].Jid, "testworker", "medchecker.report", now, `{"name": "kevin"}`)
     if err != nil {
       log.Fatal(err)
     }
+
+    fmt.Println(redis.String(reply, err))
+
+    //Get(0, id)
+    reply, err = funcs["get"].Do(c, 0, jobs[0].Jid)
+    if err != nil {
+      log.Fatal(err)
+    }
+
+    fmt.Println(redis.String(reply, err))
   }
 
   wg.Wait()
