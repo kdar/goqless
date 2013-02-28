@@ -2,231 +2,132 @@
 package goqless
 
 import (
+  "bytes"
   "crypto/rand"
   "crypto/sha1"
   "encoding/json"
-  "errors"
   "fmt"
   "github.com/garyburd/redigo/redis"
-  "io/ioutil"
-  "log"
+  mrand "math/rand"
   "os"
-  "path/filepath"
-  "strings"
-  "sync"
+  "strconv"
   "time"
+  "unicode"
+  "unicode/utf8"
 )
 
-type Job struct {
-  Expires      int64
-  Dependents   interface{}
-  Tracked      bool
-  Tags         interface{}
-  Jid          string
-  Retries      int
-  Data         interface{}
-  Queue        string
-  State        string
-  Reminaing    int
-  Failure      interface{}
-  History      interface{}
-  Dependencies interface{}
-  Klass        string
-  Priority     int
-  Worker       string
+// type Opts map[string]interface{}
+
+// func (o Opts) Get(name string, dfault interface{}) interface{} {
+//   if v, ok := o[name]; ok {
+//     return v
+//   }
+//   return dfault
+// }
+
+// represents a string slice with special json unmarshalling
+type StringSlice []string
+
+func (s *StringSlice) UnmarshalJSON(data []byte) error {
+  // because tables and arrays are equal in LUA,
+  // an empty array would be presented as "{}".
+  if bytes.Equal(data, []byte("{}")) {
+    *s = []string{}
+    return nil
+  }
+
+  return json.Unmarshal(data, s)
 }
 
-// Generates a random sha1
-func RandomSha1() (string, error) {
+// Generates a jid
+func generateJID() string {
   hasher := sha1.New()
   uuid := make([]byte, 16)
   n, err := rand.Read(uuid)
-  if err != nil {
-    return "", err
-  } else if n != len(uuid) {
-    return "", errors.New("Could not generate random []byte")
+  if err != nil || n != len(uuid) {
+    src := mrand.NewSource(time.Now().UnixNano())
+    r := mrand.New(src)
+    for n, _ := range uuid {
+      uuid[n] = byte(r.Int())
+    }
   }
 
   hasher.Write(uuid)
-  return fmt.Sprintf("%x", hasher.Sum(nil)), nil
+  return fmt.Sprintf("%x", hasher.Sum(nil))
 }
 
-func do() {
-  var wg sync.WaitGroup
-  funcs := make(map[string]*redis.Script)
+// returns a timestamp used in LUA calls
+func timestamp() int64 {
+  return time.Now().UTC().Unix()
+}
 
-  c, err := redis.Dial("tcp", ":6379")
+// returns a worker name for this machine/process
+func workerName() string {
+  hn, err := os.Hostname()
   if err != nil {
-    log.Fatal(err)
+    hn = os.Getenv("HOSTNAME")
   }
-  defer c.Close()
 
-  go watch(&wg)
+  if hn == "" {
+    hn = "localhost"
+  }
 
-  err = filepath.Walk("qless-core", func(path string, f os.FileInfo, err error) error {
-    if strings.HasSuffix(f.Name(), ".lua") {
-      src, err := ioutil.ReadFile(path)
-      if err != nil {
-        log.Fatal(err)
-      }
-      script := redis.NewScript(-1, string(src))
-      script.Load(c)
+  return fmt.Sprintf("%s-%d", hn, os.Getpid())
+}
 
-      funcs[f.Name()[:len(f.Name())-4]] = script
-      fmt.Println("Loaded: ", f.Name()[:len(f.Name())-4])
-    }
+// makes the first character of a string upper case
+func ucfirst(s string) string {
+  if s == "" {
+    return ""
+  }
+  r, n := utf8.DecodeRuneInString(s)
+  return string(unicode.ToUpper(r)) + s[n:]
+}
 
+// marshals a value. if the value happens to be
+// a string or []byte, just return it.
+func marshal(i interface{}) []byte {
+  switch v := i.(type) {
+  case []byte:
+    return v
+  case string:
+    return []byte(v)
+  }
+
+  byts, err := json.Marshal(i)
+  if err != nil {
     return nil
-  })
-  if err != nil {
-    log.Fatal(err)
   }
-
-  now := time.Now().UTC().Unix()
-
-  jid, _ := RandomSha1()
-
-  //Track(0) | Track(0, 'track', jid, now, tag, ...) | Track(0, 'untrack', jid, now)
-  replyb, err := redis.Bool(funcs["track"].Do(c, 0, "track", jid, now, ""))
-  if err != nil {
-    log.Fatal(err)
-  }
-
-  fmt.Println(replyb)
-
-  //Put(1, queue, jid, klass, data, now, delay, [priority, p], [tags, t], [retries, r], [depends, '[...]'])
-  reply, err := funcs["put"].Do(c, 1, "medchecker.report", jid, "dunno", `{"hey": "there"}`, now, 0)
-  if err != nil {
-    log.Fatal(err)
-  }
-
-  fmt.Println(redis.String(reply, err))
-
-  //Queues(0, now, [queue])
-  reply, err = funcs["queues"].Do(c, 0, now)
-  if err != nil {
-    log.Fatal(err)
-  }
-  fmt.Println(redis.String(reply, err))
-
-  // for {
-  //   //Pop(1, queue, worker, count, now)
-  //   reply, err = funcs["pop"].Do(c, 1, "medchecker.report", "testworker", 1, now)
-  //   if err != nil {
-  //     log.Fatal(err)
-  //   }
-
-  //   values, err := redis.Values(reply, err)
-  //   if err != nil {
-  //     log.Fatal(err)
-  //   }
-
-  //   if len(values) == 0 {
-  //     break
-  //   }
-
-  //   var jobs []Job
-  //   for _, val := range values {
-  //     var job Job
-  //     bs, _ := redis.Bytes(val, err)
-  //     err := json.Unmarshal(bs, &job)
-  //     if err != nil {
-  //       log.Fatal(err)
-  //     }
-  //     jobs = append(jobs, job)
-  //   }
-
-  //   fmt.Println(jobs)
-
-  //   //Cancel(0, id)
-  //   reply, err = funcs["cancel"].Do(c, 0, jobs[0].Jid)
-  //   if err != nil {
-  //     log.Fatal(err)
-  //   }
-  // }
-
-  for {
-    //Pop(1, queue, worker, count, now)
-    reply, err = funcs["pop"].Do(c, 1, "medchecker.report", "testworker", 1, now)
-    if err != nil {
-      log.Fatal(err)
-    }
-
-    values, err := redis.Values(reply, err)
-    if err != nil {
-      log.Fatal(err)
-    }
-
-    if len(values) == 0 {
-      break
-    }
-
-    var jobs []Job
-    for _, val := range values {
-      var job Job
-      bs, _ := redis.Bytes(val, err)
-      err := json.Unmarshal(bs, &job)
-      if err != nil {
-        log.Fatal(err)
-      }
-      jobs = append(jobs, job)
-    }
-
-    fmt.Println(jobs)
-
-    //Complete(0, jid, worker, queue, now, data, ['next', n, [('delay', d) | ('depends', '["jid1","jid2",...]')])
-    reply, err = funcs["complete"].Do(c, 0, jobs[0].Jid, "testworker", "medchecker.report", now, `{"name": "kevin"}`)
-    if err != nil {
-      log.Fatal(err)
-    }
-
-    fmt.Println(redis.String(reply, err))
-
-    //Get(0, id)
-    reply, err = funcs["get"].Do(c, 0, jobs[0].Jid)
-    if err != nil {
-      log.Fatal(err)
-    }
-
-    fmt.Println(redis.String(reply, err))
-  }
-
-  wg.Wait()
+  return byts
 }
 
-func watch(wg *sync.WaitGroup) {
-  wg.Add(1)
-  defer wg.Done()
-  var wg2 sync.WaitGroup
-
-  c, err := redis.Dial("tcp", ":6379")
+// Bool is a helper that converts a command reply to a boolean. If err is not
+// equal to nil, then Bool returns false, err. Otherwise Bool converts the
+// reply to boolean as follows:
+//
+//  Reply type      Result
+//  integer         value != 0, nil
+//  bulk            strconv.ParseBool(reply) or r != "False", nil
+//  nil             false, ErrNil
+//  other           false, error
+func Bool(reply interface{}, err error) (bool, error) {
   if err != nil {
-    log.Fatal(err)
+    return false, err
   }
-  defer c.Close()
-
-  psc := redis.PubSubConn{c}
-
-  go func() {
-    wg2.Add(1)
-    defer wg2.Done()
-    for {
-      switch v := psc.Receive().(type) {
-      case redis.Message:
-        fmt.Printf("WATCH: %s: message: %s\n", v.Channel, v.Data)
-      case redis.Subscription:
-        fmt.Printf("WATCH: %s: %s %d\n", v.Channel, v.Kind, v.Count)
-      case error:
-        log.Fatal("WATCH:", v)
-      default:
-        fmt.Println("WATCH:", v)
-      }
+  switch reply := reply.(type) {
+  case int64:
+    return reply != 0, nil
+  case []byte:
+    r := string(reply)
+    b, err := strconv.ParseBool(r)
+    if err != nil {
+      return r != "False", nil
     }
-  }()
-
-  for _, i := range []string{"canceled", "completed", "failed", "popped", "stalled", "put", "track", "untrack"} {
-    psc.Subscribe(i)
+    return b, err
+  case nil:
+    return false, redis.ErrNil
+  case redis.Error:
+    return false, reply
   }
-
-  wg2.Wait()
+  return false, fmt.Errorf("redigo: unexpected type for Bool, got type %T", reply)
 }
