@@ -6,6 +6,11 @@ import (
   "github.com/garyburd/redigo/redis"
 )
 
+type TaggedReply struct {
+  Total int
+  Jobs  StringSlice
+}
+
 type Client struct {
   conn redis.Conn
   host string
@@ -28,6 +33,7 @@ func Dial(host, port string) (*Client, error) {
   }
 
   c.lua = NewLua(conn)
+  // _, filename, _, _ := runtime.Caller(0)
   err = c.lua.LoadScripts("qless-core") // make get from lib path
   if err != nil {
     conn.Close()
@@ -144,7 +150,55 @@ func (c *Client) GetRecurringJob(jid string) (*RecurringJob, error) {
   return job, err
 }
 
+func (c *Client) Completed(start, count int) ([]string, error) {
+  reply, err := redis.Values(c.Do("jobs", 0, "complete"))
+  if err != nil {
+    return nil, err
+  }
+
+  // fmt.Println(reply)
+
+  ret := []string{}
+  for _, val := range reply {
+    s, _ := redis.String(val, err)
+    ret = append(ret, s)
+  }
+  return ret, err
+}
+
+func (c *Client) Tagged(tag string, start, count int) (*TaggedReply, error) {
+  byts, err := redis.Bytes(c.Do("tag", 0, "get", tag, start, count))
+  if err != nil {
+    return nil, err
+  }
+
+  t := &TaggedReply{}
+  err = json.Unmarshal(byts, t)
+  return t, err
+}
+
 // // returns all the failed jobs
 // func (c *Client) Failed(group string, start, limit int) ([]*Job, error) {
 //   c.Do("failed", 0,
 // }
+
+// config(0, 'get', [option])
+func (c *Client) GetConfig(option string) string {
+  args := []interface{}{0}
+  if option != "" {
+    args = append(args, option)
+  }
+
+  str, _ := redis.String(c.Do("get", args...))
+  return str
+}
+
+// config(0, 'set', option, value)
+func (c *Client) SetConfig(option string, value interface{}) {
+  c.Do("set", option, value)
+}
+
+// config(0, 'unset', [option])
+func (c *Client) UnsetConfig(option string) {
+  c.Do("unset", option)
+}

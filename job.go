@@ -62,6 +62,10 @@ func NewJob(cli *Client) *Job {
   }
 }
 
+func (j *Job) Client() *Client {
+  return j.cli
+}
+
 func (j *Job) SetClient(cli *Client) {
   j.cli = cli
 }
@@ -114,14 +118,14 @@ func (j *Job) Untrack() (bool, error) {
 func (j *Job) Tag(tags ...interface{}) (string, error) {
   args := []interface{}{0, "add", j.Jid, timestamp()}
   args = append(args, tags...)
-  return redis.String(j.cli.Do("tag", args))
+  return redis.String(j.cli.Do("tag", args...))
 }
 
 // Tag(0, 'remove', jid, now, tag, [tag, ...])
 func (j *Job) Untag(tags ...interface{}) (string, error) {
   args := []interface{}{0, "remove", j.Jid, timestamp()}
   args = append(args, tags...)
-  return redis.String(j.cli.Do("tag", args))
+  return redis.String(j.cli.Do("tag", args...))
 }
 
 // Retry(0, jid, queue, worker, now, [delay])
@@ -133,14 +137,14 @@ func (j *Job) Retry(delay int) (string, error) {
 func (j *Job) Depend(jids ...interface{}) (string, error) {
   args := []interface{}{0, j.Jid, "on"}
   args = append(args, jids...)
-  return redis.String(j.cli.Do("depends", args))
+  return redis.String(j.cli.Do("depends", args...))
 }
 
 // Depends(0, jid, 'off', ('all' | [jid, [jid, [...]]]))
 func (j *Job) Undepend(jids ...interface{}) (string, error) {
   args := []interface{}{0, j.Jid, "off"}
   args = append(args, jids...)
-  return redis.String(j.cli.Do("depends", args))
+  return redis.String(j.cli.Do("depends", args...))
 }
 
 type RecurringJob struct {

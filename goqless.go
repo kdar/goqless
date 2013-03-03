@@ -36,7 +36,14 @@ func (s *StringSlice) UnmarshalJSON(data []byte) error {
     return nil
   }
 
-  return json.Unmarshal(data, s)
+  var str []string
+  err := json.Unmarshal(data, &str)
+  if err != nil {
+    return err
+  }
+
+  *s = str
+  return nil
 }
 
 // Generates a jid
